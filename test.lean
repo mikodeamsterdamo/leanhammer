@@ -72,7 +72,7 @@ do ⟨idx⟩ ← state_t.get,
    return (folvar.var2 idx)
    -/
 
-meta def save_axiom (axioma : folform) : hammer_tactic unit :=
+meta def add_axiom (axioma : folform) : hammer_tactic unit :=
 do state_t.modify (fun state, {state with axiomas := axioma :: state.axiomas})
 
 meta def doforget {α : Type} (t₁ : tactic α)  : tactic α :=
@@ -102,29 +102,23 @@ meta def mk_fresh_constant : hammer_tactic folterm := do n ← mk_fresh_name, re
 meta def folterm.abstract_locals : folterm → list name → folterm := sorry
 meta def folform.abstract_locals : folform → list name → folform := sorry
 
-meta def hammer_fc (e: expr) : list expr :=
+meta def hammer_fc (e: expr) : list $ name × name × expr :=
 expr.fold e []
   (λ (e : expr) n l, 
     match e with
-    | e@(expr.local_const _ _ _ _) := if e ∉ l then e::l else l
-    | _ := e::l
+    | e@(expr.local_const n n1 _ t) := let e := (n, n1, t) in if e ∉ l then e::l else l
+    | _ := l
     end)
 
-meta def hammer_ff (l : list expr) : hammer_tactic $ list $ name × name :=
+meta def hammer_ff (l : list $ name × name × expr) : hammer_tactic $ list $ name × name :=
 do  exprs ← list.mfilter
-      (λ e,
-        match e with
-        | e@(expr.local_const _ _ _ t) := 
-          do  lip ← lives_in_prop_p t,
-              return ¬lip
-        | _ := return ff
-        end) l, 
+      (λ x, let (⟨_, _, t⟩ : name × name × expr) := x in
+        do  lip ← lives_in_prop_p t,
+            return ¬lip)
+      l, 
     return $ list.foldl
-      (λ a (n : expr),
-        match n with
-        | e@(expr.local_const n n1 _ _) := ⟨n, n1⟩ :: a
-        | _ := a
-        end)
+      (λ a (x : name × name × expr), let (⟨n, n1, t⟩ : name × name × expr) := x in
+        ⟨n, n1⟩ :: a)
       [] exprs 
 
 meta def wrap_quantifier (binder : name → name → folform → folform) (ns : list $ name × name) (f : folform) : folform :=
@@ -166,31 +160,54 @@ with hammer_c : expr → hammer_tactic folterm
       end
 | e@(expr.pi n _ t _) :=
   do  lip ← lives_in_prop_p e,
-      R ← mk_fresh_constant,
+      F ← mk_fresh_constant,
       ys ← hammer_ff $ hammer_fc e,
-      let ce0 := list.foldl (λ t (np : name × name), folterm.app t (folterm.lconst np.1 np.2)) R ys,
+      let ce0 := list.foldl (λ t (np : name × name), folterm.app t (folterm.lconst np.1 np.2)) F ys,
       if lip
       then
         (do let ce1 := folform.app folpred.P [ce0], 
             ce2 ← hammer_f e,
-            save_axiom $ wrap_quantifier folform.all ys (folform.iff ce1 ce2))
+            add_axiom $ wrap_quantifier folform.all ys (folform.iff ce1 ce2))
       else
         (do zn ← mk_fresh_name,
             let zlc := folterm.lconst zn zn, 
             let ys := (⟨zn, zn⟩ :: ys : list $ name × name),
             let ce1 := folform.app folpred.T [zlc, ce0],
             ce2 ← hammer_g zlc e,
-            save_axiom $ wrap_quantifier folform.all ys (folform.iff ce1 ce2)),
+            add_axiom $ wrap_quantifier folform.all ys (folform.iff ce1 ce2)),
       return ce0
 | e@(expr.lam _ _ _ _) :=
   do  (t, xτs) ← collect_lambdas e, 
       α ← tactic.infer_type t,
-
-
-     return sorry
+      let yρs := hammer_fc e,
+      Fn ← mk_fresh_name,
+      y₀ ← hammer_ff yρs,
+      x₀ ← hammer_ff xτs,
+      let Ft :=
+        list.foldr
+          (λ (nt : name × name × expr) a,
+            expr.pi nt.2.1 binder_info.default nt.2.2 $ expr.abstract_local a nt.1)
+          α
+          $ yρs ++ xτs,
+      -- TODO we are mixing this declaration with terms that may be trusted, so
+      -- this should be trusted as well to make sure it's accessible?  
+      tactic.add_decl $ declaration.cnst Fn [] Ft tt,
+      let F := @expr.const tt Fn [],
+      let (ce1a : expr) :=
+        list.foldl 
+          (λ (a : expr) (nt : name × name × expr), (a (expr.local_const nt.1 nt.2.1 binder_info.default nt.2.2)))
+          F
+          $ yρs ++ xτs,
+      ce1b ← tactic.to_expr ``(eq %%ce1a %%t) , -- TODO check equality or equivalence
+      ce1 ← hammer_f ce1b,
+      add_axiom $ wrap_quantifier folform.all (y₀ ++ x₀) ce1,
+      return $
+        list.foldl
+          (λ a (nt : name × name), folterm.app a $ folterm.lconst nt.1 nt.2)
+          (folterm.const Fn)
+          y₀
         
 | _ := sorry
-
 
 with hammer_g : folterm → expr → hammer_tactic folform
 | u w@(expr.pi n _ t _) := 
@@ -225,10 +242,10 @@ with hammer_f : expr → hammer_tactic folform
             fe1 ← hammer_g (folterm.lconst xn n) t,
             fe2 ← hammer_f s,
             return $ wrap_quantifier folform.all [(xn, n)] (folform.imp fe1 fe2)
-| e@`(@Exists %%t %%ps) := -- we cannot assume that s has the shape of a lambda
+| e@`(@Exists %%t %%ps) := -- we cannot assume that ps has the shape of a lambda
   do  xn ← mk_fresh_name,
       let lc := expr.local_const xn xn binder_info.default t,
-      s ← tactic.whnf (expr.app ps lc),
+      s ← tactic.whnf (ps lc),
       fe1 ← hammer_g (folterm.lconst xn xn) t,
       fe2 ← hammer_f s,
       return $ wrap_quantifier folform.exist [(xn, xn)] (folform.conj fe1 fe2) 
@@ -254,5 +271,11 @@ with hammer_f : expr → hammer_tactic folform
 | t  :=
   do  ge1 ← hammer_c t,
       return $ folform.app folpred.P [ge1]
+
+open expr
+
+meta def mk_binding (ctor : name → binder_info → expr → expr → expr) (e : expr) : expr →  expr
+| (local_const n pp_n bi ty) := ctor pp_n bi ty (e.abstract_local n)
+| _                          := e
 
 end hammerplay
