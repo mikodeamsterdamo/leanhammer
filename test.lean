@@ -1,5 +1,4 @@
-
-section hammerplay
+section hammer
 
 @[reducible] meta def debruijn := nat
 
@@ -53,10 +52,9 @@ state_t.monad
 meta instance (α : Type) : has_coe (tactic α) (hammer_tactic α) :=
 ⟨state_t.lift⟩
 
-meta def using_hammer {α} (t : hammer_tactic α) : tactic α :=
+meta def using_hammer {α} (t : hammer_tactic α) : tactic (α × hammer_state) :=
 do let ss := hammer_state.mk [],
-   (a, _) ← state_t.run t ss, -- (do a ← t, return a) 
-   return a
+   state_t.run t ss -- (do a ← t, return a) 
 
 meta def when' (c : Prop) [decidable c] (tac : hammer_tactic unit) : hammer_tactic unit :=
 if c then tac else tactic.skip
@@ -99,8 +97,29 @@ meta def body_of : expr → hammer_tactic (expr × name)
 
 meta def mk_fresh_constant : hammer_tactic folterm := do n ← mk_fresh_name, return $ folterm.const n
 
-meta def folterm.abstract_locals : folterm → list name → folterm := sorry
-meta def folform.abstract_locals : folform → list name → folform := sorry
+meta def folterm.abstract_locals_core : folterm → ℕ → list name → folterm
+| e@(folterm.lconst n n1) d ln :=
+  list.foldl
+    (λ e' n', if n = n' then folterm.var $ d + ln.reverse.find_index (= n) else e')
+    e
+    ln
+| (folterm.app t1 t2) d ln := folterm.app (t1.abstract_locals_core d ln) (t2.abstract_locals_core d ln)
+| e d ln := e
+
+meta def folterm.abstract_locals : folterm → list name → folterm := λ f l, f.abstract_locals_core 0 l
+
+meta def folform.abstract_locals_core : folform → nat → list name → folform
+| e@(folform.app p ts) d ln := folform.app p $ ts.map (λ t, t.abstract_locals_core d ln)
+| e@(folform.neg f) d ln := f.abstract_locals_core d ln
+| e@(folform.imp f1 f2) d ln := folform.imp (f1.abstract_locals_core d ln) (f2.abstract_locals_core d ln)
+| e@(folform.iff f1 f2) d ln := folform.iff (f1.abstract_locals_core d ln) (f2.abstract_locals_core d ln)
+| e@(folform.conj f1 f2) d ln := folform.conj (f1.abstract_locals_core d ln) (f2.abstract_locals_core d ln)
+| e@(folform.disj f1 f2) d ln := folform.disj (f1.abstract_locals_core d ln) (f2.abstract_locals_core d ln)
+| e@(folform.all n n1 f) d ln := folform.all n n1 (f.abstract_locals_core (d+1) ln)
+| e@(folform.exist n n1 f) d ln := folform.exist n n1 (f.abstract_locals_core (d+1) ln)
+| e d ln := e
+
+meta def folform.abstract_locals : folform → list name → folform := λ f l, f.abstract_locals_core 0 l
 
 meta def hammer_fc (e: expr) : list $ name × name × expr :=
 expr.fold e []
@@ -181,8 +200,8 @@ with hammer_c : expr → hammer_tactic folterm
       α ← tactic.infer_type t,
       let yρs := hammer_fc e,
       Fn ← mk_fresh_name,
-      y₀ ← hammer_ff yρs,
-      x₀ ← hammer_ff xτs,
+      y₀s ← hammer_ff yρs,
+      x₀s ← hammer_ff xτs,
       let Ft :=
         list.foldr
           (λ (nt : name × name × expr) a,
@@ -198,16 +217,62 @@ with hammer_c : expr → hammer_tactic folterm
           (λ (a : expr) (nt : name × name × expr), (a (expr.local_const nt.1 nt.2.1 binder_info.default nt.2.2)))
           F
           $ yρs ++ xτs,
-      ce1b ← tactic.to_expr ``(eq %%ce1a %%t) , -- TODO check equality or equivalence
-      ce1 ← hammer_f ce1b,
-      add_axiom $ wrap_quantifier folform.all (y₀ ++ x₀) ce1,
+      -- TODO two approaches:
+      my_eq ← tactic.mk_const `eq,
+      let ce1b' := (my_eq α ce1a t),
+      -- ce1b ← tactic.to_expr ``(eq %%ce1a %%t), 
+      -- tactic.to_expr is going to blow up if operands are not of the same type. Exciting.
+      -- TODO check equality or equivalence
+      ce1 ← hammer_f ce1b',
+      add_axiom $ wrap_quantifier folform.all (y₀s ++ x₀s) ce1,
       return $
         list.foldl
           (λ a (nt : name × name), folterm.app a $ folterm.lconst nt.1 nt.2)
           (folterm.const Fn)
-          y₀
-        
-| _ := sorry
+          y₀s
+| e@(expr.elet x τ t s) :=
+  do  let yαs := hammer_fc (t τ),  
+      y₀s ← hammer_ff yαs,
+      Fn ← mk_fresh_name,
+      let Ft :=
+        list.foldr
+          (λ (nt : name × name × expr) a,
+            expr.pi nt.2.1 binder_info.default nt.2.2 $ expr.abstract_local a nt.1)
+          τ
+          $ yαs,
+      -- TODO we are mixing this declaration with terms that may be trusted, so
+      -- this should be trusted as well to make sure it's accessible?
+      -- TODO deviation from the specification, since I cannot imagine why a definition
+      -- instead of a constant is required since the redexes F... are not going to be
+      -- reduced
+      tactic.add_decl $ declaration.cnst Fn [] Ft tt,
+      let F := @expr.const tt Fn [],
+      let ce1 :=
+        list.foldl
+          (λ (e : expr) (nt : name × name × expr), (e (expr.local_const nt.1 nt.2.1 binder_info.default nt.2.2))) 
+          F
+          yαs,
+      -- TODO deviation from the specification, we use yαs here instead of y₀s.
+      -- I presume the specification is some sort of "optimization" since since
+      -- Gamma-proof terms are going to be filtered by the definition of hammer_c
+      -- anyway, however infer_type is not going to blow up but it will report
+      -- incorrect types if the arguments to a function are in the wrong positions
+      lip ← lives_in_prop_p Ft,
+      if lip
+      then
+        do  ce2 ← hammer_c t,
+            add_axiom $ wrap_quantifier folform.all y₀s $
+              folform.app folpred.eq [
+                (list.foldl (λ e (nt : name × name), (folterm.app e (folterm.const nt.1))) (folterm.const Fn) y₀s),
+                ce2]
+      else
+        return (),
+      hammer_c $ expr.instantiate_var s ce1
+| (expr.var _) := undefined
+| (expr.sort _) := undefined
+| (expr.mvar _ _ _) := undefined
+| (expr.macro _ _) := undefined
+
 
 with hammer_g : folterm → expr → hammer_tactic folform
 | u w@(expr.pi n _ t _) := 
@@ -272,10 +337,4 @@ with hammer_f : expr → hammer_tactic folform
   do  ge1 ← hammer_c t,
       return $ folform.app folpred.P [ge1]
 
-open expr
-
-meta def mk_binding (ctor : name → binder_info → expr → expr → expr) (e : expr) : expr →  expr
-| (local_const n pp_n bi ty) := ctor pp_n bi ty (e.abstract_local n)
-| _                          := e
-
-end hammerplay
+end hammer
