@@ -216,13 +216,14 @@ with hammer_c : expr → hammer_tactic folterm
         list.foldl 
           (λ (a : expr) (nt : name × name × expr), (a (expr.local_const nt.1 nt.2.1 binder_info.default nt.2.2)))
           F
-          $ yρs ++ xτs,
+          $ yρs ++ xτs,  
       -- TODO two approaches:
       my_eq ← tactic.mk_const `eq,
-      let ce1b' := (my_eq α ce1a t),
+      my_iff ← tactic.mk_const `iff,
+      lip ← lives_in_prop_p ce1a,
+      let ce1b' := if lip then (my_iff ce1a t) else (my_eq α ce1a t),
       -- ce1b ← tactic.to_expr ``(eq %%ce1a %%t), 
       -- tactic.to_expr is going to blow up if operands are not of the same type. Exciting.
-      -- TODO check equality or equivalence
       ce1 ← hammer_f ce1b',
       add_axiom $ wrap_quantifier folform.all (y₀s ++ x₀s) ce1,
       return $
