@@ -1,15 +1,9 @@
-section hammer
-
 @[reducible] meta def debruijn := nat
-
-meta inductive folfun
-| const : nat → folfun
 
 meta inductive folpred
 | P : folpred
 | T : folpred 
 | eq : folpred
-| const : nat → folpred
 
 meta inductive folterm
 | const : name → folterm
@@ -17,16 +11,6 @@ meta inductive folterm
 | prf : folterm
 | var : debruijn → folterm
 | app : folterm → folterm → folterm
-
-meta def folterm.repr : folterm → string 
-| (folterm.const n) := "const " ++ to_string n
-| (folterm.lconst n n1) := "name " ++ to_string n ++ " " ++ to_string n1
-| folterm.prf := "prf"
-| (folterm.var n) := "var " ++ repr n
-| (folterm.app t1 t2) := "(" ++ folterm.repr t1 ++ " " ++ folterm.repr t2 ++ ")"
-
-meta instance : has_repr folterm :=
-⟨folterm.repr⟩
 
 meta inductive folform 
 | app : folpred → list folterm → folform
@@ -40,8 +24,23 @@ meta inductive folform
 | all : name → name → folform → folform
 | exist : name → name → folform → folform
 
+
+meta def folterm.repr : folterm → string 
+| (folterm.const n) := "const " ++ to_string n
+| (folterm.lconst n n1) := "name " ++ to_string n ++ " " ++ to_string n1
+| folterm.prf := "prf"
+| (folterm.var n) := "var " ++ repr n
+| (folterm.app t1 t2) := "(" ++ folterm.repr t1 ++ " " ++ folterm.repr t2 ++ ")"
+
+meta instance : has_repr folterm :=
+⟨folterm.repr⟩
+
+meta structure introduced_constant :=
+(n : name) (e : expr)
+
 meta structure hammer_state :=
 (axiomas : list folform)
+(introduced_constants : list introduced_constant)
 
 meta def hammer_tactic :=
 state_t hammer_state tactic
@@ -52,8 +51,9 @@ state_t.monad
 meta instance (α : Type) : has_coe (tactic α) (hammer_tactic α) :=
 ⟨state_t.lift⟩
 
+
 meta def using_hammer {α} (t : hammer_tactic α) : tactic (α × hammer_state) :=
-do let ss := hammer_state.mk [],
+do let ss := hammer_state.mk [] [],
    state_t.run t ss -- (do a ← t, return a) 
 
 meta def when' (c : Prop) [decidable c] (tac : hammer_tactic unit) : hammer_tactic unit :=
@@ -73,6 +73,9 @@ do ⟨idx⟩ ← state_t.get,
 meta def add_axiom (axioma : folform) : hammer_tactic unit :=
 do state_t.modify (fun state, {state with axiomas := axioma :: state.axiomas})
 
+meta def add_constant (n : name) (e : expr) : hammer_tactic unit :=
+do state_t.modify (fun state, {state with introduced_constants := introduced_constant.mk n e :: state.introduced_constants })
+
 meta def doforget {α : Type} (t₁ : tactic α)  : tactic α :=
 λ s, interaction_monad.result.cases_on (t₁ s)
   (λ r _, interaction_monad.result.success r s)
@@ -85,6 +88,8 @@ state_t.mk (λ x, do ⟨a, b⟩ ← doforget (t₁.run x),
 -- might want to do something different
 meta def mk_fresh_name : tactic name := tactic.mk_fresh_name
 
+meta def mk_fresh_constant : hammer_tactic folterm := do n ← mk_fresh_name, return $ folterm.const n
+
 meta def body_of : expr → hammer_tactic (expr × name)
 | e@(expr.pi n bi d b) := do id ← mk_fresh_name,
                              let x := expr.local_const id n bi d,
@@ -94,9 +99,6 @@ meta def body_of : expr → hammer_tactic (expr × name)
                              return $ prod.mk (expr.instantiate_var b x) id                           
 | e := return (e, name.anonymous)
                     
-
-meta def mk_fresh_constant : hammer_tactic folterm := do n ← mk_fresh_name, return $ folterm.const n
-
 meta def folterm.abstract_locals_core : folterm → ℕ → list name → folterm
 | e@(folterm.lconst n n1) d ln :=
   list.foldl
@@ -208,10 +210,9 @@ with hammer_c : expr → hammer_tactic folterm
             expr.pi nt.2.1 binder_info.default nt.2.2 $ expr.abstract_local a nt.1)
           α
           $ yρs ++ xτs,
-      -- TODO we are mixing this declaration with terms that may be trusted, so
-      -- this should be trusted as well to make sure it's accessible?  
-      tactic.add_decl $ declaration.cnst Fn [] Ft tt,
-      let F := @expr.const tt Fn [],
+      -- instead of extending the environment, we use a local constant and keep track of its name
+      add_constant Fn Ft,
+      let F := @expr.local_const tt Fn Fn binder_info.default Ft,
       let (ce1a : expr) :=
         list.foldl 
           (λ (a : expr) (nt : name × name × expr), (a (expr.local_const nt.1 nt.2.1 binder_info.default nt.2.2)))
@@ -241,13 +242,13 @@ with hammer_c : expr → hammer_tactic folterm
             expr.pi nt.2.1 binder_info.default nt.2.2 $ expr.abstract_local a nt.1)
           τ
           $ yαs,
-      -- TODO we are mixing this declaration with terms that may be trusted, so
-      -- this should be trusted as well to make sure it's accessible?
-      -- TODO deviation from the specification, since I cannot imagine why a definition
+      -- deviation from the specification, since I cannot imagine why a definition
       -- instead of a constant is required since the redexes F... are not going to be
       -- reduced
+      -- instead of extending the environment, we use a local constant and keep track of its name
+      add_constant Fn Ft,
       tactic.add_decl $ declaration.cnst Fn [] Ft tt,
-      let F := @expr.const tt Fn [],
+      let F := expr.local_const Fn Fn binder_info.default Ft,
       let ce1 :=
         list.foldl
           (λ (e : expr) (nt : name × name × expr), (e (expr.local_const nt.1 nt.2.1 binder_info.default nt.2.2))) 
@@ -338,4 +339,3 @@ with hammer_f : expr → hammer_tactic folform
   do  ge1 ← hammer_c t,
       return $ folform.app folpred.P [ge1]
 
-end hammer
