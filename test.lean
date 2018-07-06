@@ -24,16 +24,47 @@ meta inductive folform
 | all : name → name → folform → folform
 | exist : name → name → folform → folform
 
+meta def name.repr : name → string
+| name.anonymous := "name.anonymous"
+| (name.mk_numeral n p) := "(name.mk_numeral " ++ repr n ++ " " ++ name.repr p ++ ")"
+| (name.mk_string s p) := "(name.mk_string " ++ repr s ++ " " ++ name.repr p ++ ")"
+
+meta instance : has_repr name :=
+⟨name.repr⟩
 
 meta def folterm.repr : folterm → string 
-| (folterm.const n) := "const " ++ to_string n
-| (folterm.lconst n n1) := "name " ++ to_string n ++ " " ++ to_string n1
-| folterm.prf := "prf"
-| (folterm.var n) := "var " ++ repr n
-| (folterm.app t1 t2) := "(" ++ folterm.repr t1 ++ " " ++ folterm.repr t2 ++ ")"
+| (folterm.const n) := "(folterm.const " ++ repr n ++ ")"
+| (folterm.lconst n n1) := "(folterm.lconst " ++ repr n ++ " " ++ repr n1 ++ ")"
+| folterm.prf := "folterm.prf"
+| (folterm.var n) := "(folterm.var " ++ repr n ++ ")"
+| (folterm.app t1 t2) := "(folterm.app " ++ folterm.repr t1 ++ " " ++ folterm.repr t2 ++ ")"
 
 meta instance : has_repr folterm :=
 ⟨folterm.repr⟩
+
+meta def folpred.repr : folpred → string
+| folpred.P := "folpred.P"
+| folpred.T := "folpred.T"
+| folpred.eq := "folpred.eq"
+
+meta instance : has_repr folpred :=
+⟨folpred.repr⟩
+
+meta def folform.repr : folform → string
+| (folform.app p ts) := "(folform.app " ++ repr p ++  " " ++ repr ts ++ ")"
+| folform.bottom := "folform.bottom"
+| folform.top := "folform.top"
+| (folform.neg f) := "(folform.neg " ++ folform.repr f ++ ")"
+| (folform.imp f g) := "(folform.imp " ++ folform.repr f ++ " " ++ folform.repr g ++ ")"
+| (folform.iff f g) := "(folform.iff " ++ folform.repr f ++ " " ++ folform.repr g ++ ")"
+| (folform.conj f g) := "(folform.conj " ++ folform.repr f ++ " " ++ folform.repr g ++ ")"
+| (folform.disj f g) := "(folform.disj " ++ folform.repr f ++ " " ++ folform.repr g ++ ")"
+| (folform.all n n1 f) := "(folform.all " ++ repr n ++ " " ++ repr n1 ++ " " ++ folform.repr f ++ ")"
+| (folform.exist n n1 f) := "(folform.exist " ++ repr n ++ " " ++ repr n1 ++ " " ++ folform.repr f ++ ")"
+
+meta instance : has_repr folform :=
+⟨folform.repr⟩
+
 
 meta structure introduced_constant :=
 (n : name) (e : expr)
