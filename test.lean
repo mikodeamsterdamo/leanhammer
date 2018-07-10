@@ -57,9 +57,9 @@ meta instance : has_to_format role :=
 meta def folform.to_format_collect_vars : folform → list name → (list name × folform) 
 | (folform.all n n1 e@(folform.all _ _ _)) xs := folform.to_format_collect_vars e (n :: xs)
 | (folform.exist n n1 e@(folform.exist _ _ _)) xs := folform.to_format_collect_vars e (n :: xs)
-| (folform.all n n1 e) xs := (n :: xs, e)
-| (folform.exist n n1 e) xs := (n :: xs, e)
-| e@_ xs := (xs, e)
+| (folform.all n n1 e) xs := ((n :: xs).reverse, e)
+| (folform.exist n n1 e) xs := ((n :: xs).reverse, e)
+| e@_ xs := (xs.reverse, e)
 
 meta def name_to_id_format : name → format
 | n := "'" ++ to_fmt n ++ "'"
@@ -70,30 +70,28 @@ meta def names_to_id_format : list name → nat → list format
 
 meta def mygroup : format → format := id
 
-
 meta def folterm.to_format : folterm → nat → format
 | (folterm.const n) _ := "'" ++ to_fmt n ++ "'"
 | (folterm.lconst n _) _ := "'" ++ to_fmt n ++ "'"
 | (folterm.prf) _ := "prf"
 | (folterm.var i) depth := "V" ++ to_fmt (depth - i)
 | (folterm.app t u) depth :=
-  "a(" ++ t.to_format depth ++
-    (mygroup $ nest 2 $ "," ++ line ++ u.to_format depth)
-
+  "a(" ++ t.to_format depth ++ "," ++
+    (mygroup $ nest 2 $ line ++ u.to_format depth) ++ ")"
 
 meta def folform.to_format_aux : folform → nat → format
 | e@(folform.all n n1 f) depth :=
   let (ys, g) := folform.to_format_collect_vars e [] in
   let ys' := names_to_id_format ys depth in
     "! [" ++ 
-    (mygroup $ nest 3 $ (join $ list.intersperse ("," ++ line) ys') ++ "] :" ++ line) ++
-    "(" ++ (mygroup $ nest 1 $ g.to_format_aux $ depth + ys.length) ++ ")"
+    (mygroup $ nest 3 $ (join $ list.intersperse ("," ++ line) ys') ++ "] :") ++
+    (mygroup $ nest 2 $ line ++ "(" ++ (mygroup $ nest 1 $ g.to_format_aux $ depth + ys.length)) ++ ")"
 | e@(folform.exist n n1 f) depth :=
   let (ys, g) := folform.to_format_collect_vars e [] in
   let ys' := names_to_id_format ys depth in
     "? [" ++ 
-    (mygroup $ nest 3 $ (join $ list.intersperse ("," ++ line) ys') ++ "] :" ++ line) ++
-    "(" ++ (mygroup $ nest 1 $ g.to_format_aux $ depth + ys.length) ++ ")"
+    (mygroup $ nest 3 $ (join $ list.intersperse ("," ++ line) ys') ++ "] :") ++
+    (mygroup $ nest 2 $ line ++ "(" ++ (mygroup $ nest 1 $ g.to_format_aux $ depth + ys.length)) ++ ")"
 | folform.bottom _ := to_fmt "$false"
 | folform.top _ := to_fmt "$true"
 | (folform.P t) depth :=
@@ -101,13 +99,13 @@ meta def folform.to_format_aux : folform → nat → format
 | (folform.T t u) depth :=
   "t(" ++ (mygroup $ nest 2 $ t.to_format depth ++ "," ++ line ++ u.to_format depth ++ ")")
 | (folform.eq t u) depth :=
-  "(" ++ (nest 1 $ t.to_format depth) ++
-    (mygroup $ line ++ "= " ++ (nest 2 $ u.to_format depth ++ ")"))
+  "(" ++ (nest 1 $ t.to_format depth ++
+    (mygroup $ line ++ "= " ++ (nest 2 $ u.to_format depth ++ ")")))
 | (folform.neg f) depth := 
   match f with
   | (folform.eq t u) :=
-    "(" ++ (nest 1 $ t.to_format depth) ++
-      (mygroup $ line ++ "!= " ++ (nest 3 $ u.to_format depth ++ ")"))
+    "(" ++ (nest 1 $ t.to_format depth ++
+      (mygroup $ line ++ "!= " ++ (nest 3 $ u.to_format depth ++ ")")))
   | _ := "~(" ++ (nest 2 $ f.to_format_aux depth ++ ")")
   end
 | (folform.imp f g) depth :=
@@ -118,13 +116,11 @@ meta def folform.to_format_aux : folform → nat → format
     (mygroup $ line ++ (nest 5 $ "<=> (" ++ g.to_format_aux depth ++ ")"))
 | (folform.conj f g) depth :=
   "(" ++ (nest 1 $ f.to_format_aux depth ++ ")") ++
-    (mygroup $ line ++ (nest 5 $ "& (" ++ g.to_format_aux depth ++ ")"))
+    (mygroup $ line ++ (nest 3 $ "& (" ++ g.to_format_aux depth ++ ")"))
 | (folform.disj f g) depth :=
   "(" ++ (nest 1 $ f.to_format_aux depth ++ ")") ++
-    (mygroup $ line ++ (nest 5 $ "| (" ++ g.to_format_aux depth ++ ")"))
-
-      
-
+    (mygroup $ line ++ (nest 3 $ "| (" ++ g.to_format_aux depth ++ ")"))
+     
 meta def folform.to_format (f : folform) : format := folform.to_format_aux f 0
 
 meta instance : has_to_format folform :=
@@ -134,7 +130,7 @@ meta def to_fof : string → role → folform → format
 | id r f :=
 to_fmt "fof("
 ++ (mygroup $ nest 4 $ join $ list.intersperse ("," ++ line) $
-  [to_fmt id, to_fmt r, "(" ++ to_fmt f ++ ")"]) ++ to_fmt ")."
+  [to_fmt id, to_fmt r, "(" ++ (mygroup $ nest 1 $ to_fmt f) ++ ")"]) ++ to_fmt ")."
   
 meta def to_tptp : list axioma → folform → format
 | (⟨n, f⟩::as) conjecture := 
@@ -198,24 +194,23 @@ meta def folform.repr : folform → string
 meta instance : has_repr folform :=
 ⟨folform.repr⟩
 
-
-
-
-meta def all_created_equal : folform :=
+meta def example_formula : folform :=
 folform.all `h1 `h1 $ folform.all `h2 `h2 $
-  folform.imp
-    (folform.conj (folform.P $ folterm.var 0) (folform.P $ folterm.var 1))
-    (folform.T (folterm.var 0) (folterm.var 1))
+  folform.neg $
+  folform.iff
+    (folform.conj
+      (folform.neg $ folform.eq (folterm.var 0) (folterm.var 1)) 
+      (folform.eq (folterm.var 0) (folterm.var 1)) )
+    (folform.imp
+      (folform.conj (folform.P $ folterm.var 0) (folform.disj (folform.P $ folterm.var 0) (folform.P $ folterm.var 1)))
+      (folform.T (folterm.var 0) (folterm.app (folterm.var 1) (folterm.var 0))))
 
 
-set_option pp.indent 2
-set_option pp.colors true
-set_option pp.width 1
+--set_option pp.indent 2
+--set_option pp.colors true
+--set_option pp.width 1
 
-
-
-#eval format.to_string $ to_fof "all_created_equal" role.axioma all_created_equal   
-
+#eval tactic.trace $ to_fof "example_formula" role.axioma example_formula   
 
 
 
