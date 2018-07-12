@@ -195,7 +195,7 @@ meta instance : has_repr folform :=
 ⟨folform.repr⟩
 
 meta def example_formula : folform :=
-folform.all `h1 `h1 $ folform.all `h2 `h2 $
+folform.all `h1 `h1 $ folform.exist `h2 `h2 $
   folform.neg $
   folform.iff
     (folform.conj
@@ -211,7 +211,6 @@ folform.all `h1 `h1 $ folform.all `h2 `h2 $
 --set_option pp.width 1
 
 #eval tactic.trace $ to_fof "example_formula" role.axioma example_formula   
-
 
 
 meta instance : monad hammer_tactic :=
@@ -321,8 +320,17 @@ meta def collect_lambdas (e : expr) := collect_lambdas_aux (e, [])
 
 meta mutual def hammer_c, hammer_g, hammer_f
 with hammer_c : expr → hammer_tactic folterm 
-| (expr.const n _) := 
-  return $ folterm.const n
+| e@(expr.const n _) := 
+  do 
+    -- TODO deviation from specification, map constants : sth : Prop to prf
+    -- is this necessary?
+    t ← tactic.infer_type e, -- consult the environment
+    lip ← lives_in_prop_p t,
+    if lip
+    then
+      return $ folterm.prf
+    else
+      return $ folterm.const n  
 | (expr.local_const n pp _ t) :=
   do  lip ← lives_in_prop_p t,
       if lip
